@@ -1,0 +1,57 @@
+{
+    "tests": [
+        {
+            "opis": "Utworzenie nowej firmy",
+            "method": "POST",
+            "path": "/api/v1/companies",
+            "payload": { "name": "Firma Testowa" },
+            "oczekiwany_status": 201,
+            "capture_id": "new_company_id"
+        },
+        {
+            "opis": "Pobranie nowo utworzonej firmy",
+            "method": "GET",
+            "path": "/api/v1/companies/{new_company_id}",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Utworzenie oddziału dla nowej firmy",
+            "method": "POST",
+            "path": "/api/v1/companies/{new_company_id}/branches",
+            "payload": { "name": "Oddział Testowy" },
+            "oczekiwany_status": 201,
+            "capture_id": "new_branch_id"
+        },
+        {
+            "opis": "Pobranie listy oddziałów firmy",
+            "method": "GET",
+            "path": "/api/v1/companies/{new_company_id}/branches",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Próba utworzenia oddziału dla nieistniejącej firmy",
+            "method": "POST",
+            "path": "/api/v1/companies/99999/branches",
+            "payload": { "name": "Oddział Widmo" },
+            "oczekiwany_status": 404
+        },
+        {
+            "opis": "Usunięcie oddziału firmy",
+            "method": "DELETE",
+            "path": "/api/v1/branches/{new_branch_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Usunięcie firmy testowej",
+            "method": "DELETE",
+            "path": "/api/v1/companies/{new_company_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Weryfikacja usunięcia firmy",
+            "method": "GET",
+            "path": "/api/v1/companies/{new_company_id}",
+            "oczekiwany_status": 404
+        }
+    ]
+}

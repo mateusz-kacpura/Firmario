@@ -1,0 +1,70 @@
+{
+    "tests": [
+        {
+            "opis": "Pobranie listy wszystkich osób (przed dodaniem)",
+            "method": "GET",
+            "path": "/api/v1/people",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Utworzenie nowej osoby",
+            "method": "POST",
+            "path": "/api/v1/people",
+            "payload": {
+                "first_name": "Jan",
+                "last_name": "Testowy",
+                "birth_date": "1999-12-31",
+                "town_id": 1,
+                "company_branch_id": 1
+            },
+            "oczekiwany_status": 201,
+            "capture_id": "new_person_id"
+        },
+        {
+            "opis": "Pobranie nowo utworzonej osoby",
+            "method": "GET",
+            "path": "/api/v1/people/{new_person_id}",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Aktualizacja danych osoby",
+            "method": "PUT",
+            "path": "/api/v1/people/{new_person_id}",
+            "payload": {
+                "last_name": "Zaktualizowany"
+            },
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Usunięcie osoby",
+            "method": "DELETE",
+            "path": "/api/v1/people/{new_person_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Sprawdzenie, czy osoba została usunięta",
+            "method": "GET",
+            "path": "/api/v1/people/{new_person_id}",
+            "oczekiwany_status": 404
+        },
+        {
+            "opis": "Próba pobrania nieistniejącej osoby (ogólna)",
+            "method": "GET",
+            "path": "/api/v1/people/99999",
+            "oczekiwany_status": 404
+        },
+        {
+            "opis": "Próba utworzenia osoby z nieprawidłowym town_id",
+            "method": "POST",
+            "path": "/api/v1/people",
+            "payload": {
+                "first_name": "Anna",
+                "last_name": "Błąd",
+                "birth_date": "2001-01-01",
+                "town_id": 99999,
+                "company_branch_id": 1
+            },
+            "oczekiwany_status": 400
+        }
+    ]
+}

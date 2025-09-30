@@ -1,0 +1,41 @@
+.error {
+  color: red;
+  margin-bottom: 1rem;
+}
+
+.form {
+  margin-bottom: 2rem;
+  padding: 1rem;
+  background-color: white;
+  border-radius: 8px;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+}
+
+.listItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background-color: white;
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.listItem > div {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.link {
+    text-decoration: none;
+    color: #0070f3;
+    font-size: 1.2rem;
+}
+.link:hover {
+    text-decoration: underline;
+}

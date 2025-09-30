@@ -1,0 +1,1116 @@
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\api\endpoints\companies.py
+##########################################
+
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.crud import crud_company
+from app.schemas.company import Company, CompanyCreate, CompanyUpdate, CompanyBranch, CompanyBranchCreate
+from app.api.dependencies import get_db
+
+router = APIRouter()
+
+# --- Endpointy dla Firm ---
+
+@router.get("/companies", response_model=List[Company])
+def read_companies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """
+    Pobierz listę firm.
+    """
+    companies = crud_company.company.get_multi(db, skip=skip, limit=limit)
+    return companies
+
+@router.post("/companies", response_model=Company, status_code=status.HTTP_201_CREATED)
+def create_company(company_in: CompanyCreate, db: Session = Depends(get_db)):
+    """
+    Utwórz nową firmę.
+    """
+    return crud_company.company.create(db=db, obj_in=company_in)
+
+@router.get("/companies/{company_id}", response_model=Company)
+def read_company(company_id: int, db: Session = Depends(get_db)):
+    """
+    Pobierz firmę po ID.
+    """
+    db_company = crud_company.company.get(db, id=company_id)
+    if db_company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return db_company
+
+@router.delete("/companies/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_company(company_id: int, db: Session = Depends(get_db)):
+    """
+    Usuń firmę (wraz z jej oddziałami dzięki cascade).
+    """
+    db_company = crud_company.company.get(db, id=company_id)
+    if not db_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    crud_company.company.remove(db, id=company_id)
+    return
+
+# --- Endpointy dla Oddziałów Firm ---
+
+@router.get("/companies/{company_id}/branches", response_model=List[CompanyBranch])
+def read_company_branches(company_id: int, db: Session = Depends(get_db)):
+    """
+    Pobierz listę oddziałów dla konkretnej firmy.
+    """
+    db_company = crud_company.company.get(db, id=company_id)
+    if db_company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+        
+    branches = crud_company.company_branch.get_multi_by_company(db, company_id=company_id)
+    return branches
+
+@router.post("/companies/{company_id}/branches", response_model=CompanyBranch, status_code=status.HTTP_201_CREATED)
+def create_company_branch(company_id: int, branch_in: CompanyBranchCreate, db: Session = Depends(get_db)):
+    """
+    Utwórz nowy oddział dla konkretnej firmy.
+    """
+    db_company = crud_company.company.get(db, id=company_id)
+    if db_company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return crud_company.company_branch.create_with_company(db, obj_in=branch_in, company_id=company_id)
+
+@router.delete("/branches/{branch_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_branch(branch_id: int, db: Session = Depends(get_db)):
+    """
+    Usuń konkretny oddział.
+    """
+    branch = crud_company.company_branch.remove(db, id=branch_id)
+    if not branch:
+         raise HTTPException(status_code=404, detail="Branch not found")
+    return
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\api\endpoints\people.py
+##########################################
+
+# Plik: app/api/endpoints/people.py
+
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
+from app.crud import crud_person
+from app.schemas.person import Person, PersonCreate, PersonUpdate, PersonInDB
+from app.api.dependencies import get_db
+from app.models import models
+
+router = APIRouter()
+
+# --- POCZĄTEK REFAKTORYZACJI ---
+def enrich_person_data(person_db: models.Person) -> dict:
+    """
+    Pomocnicza funkcja, która konwertuje model SQLAlchemy na słownik,
+    który zostanie użyty do zbudowania finalnej odpowiedzi JSON.
+    """
+    # Zacznij od danych bazowych z samego obiektu Person
+    person_dict = PersonInDB.model_validate(person_db).model_dump()
+    
+    # Ręcznie dodaj dane z załadowanych relacji
+    person_dict['miejscowosc'] = person_db.town.name if person_db.town else "Brak"
+    if person_db.company_branch and person_db.company_branch.company:
+        person_dict['firma'] = person_db.company_branch.company.name
+        person_dict['oddzial_firmy'] = person_db.company_branch.name
+        person_dict['company_id'] = person_db.company_branch.company.id # Dodano company_id
+    else:
+        person_dict['firma'] = "Brak"
+        person_dict['oddzial_firmy'] = "Brak"
+        person_dict['company_id'] = None # Dodano company_id
+        
+    # Schemat `Person` (response_model) automatycznie użyje tych danych do obliczenia `age` i `gender`.
+    return person_dict
+
+@router.get("/people", response_model=List[Person])
+def read_people(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    people_db = crud_person.person.get_multi_details(db, skip=skip, limit=limit)
+    return [enrich_person_data(p) for p in people_db]
+
+@router.post("/people", response_model=Person, status_code=status.HTTP_201_CREATED)
+def create_person(person: PersonCreate, db: Session = Depends(get_db)):
+    try:
+        person_db = crud_person.person.create_and_get_details(db=db, obj_in=person)
+        if not person_db:
+             raise HTTPException(status_code=500, detail="Nie udało się utworzyć ani pobrać osoby.")
+        return enrich_person_data(person_db)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Nie można utworzyć osoby. Upewnij się, że miejscowość o id={person.town_id} "
+                   f"oraz oddział firmy o id={person.company_branch_id} istnieją."
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Wystąpił nieoczekiwany błąd: {e}"
+        )
+
+@router.get("/people/{person_id}", response_model=Person)
+def read_person(person_id: int, db: Session = Depends(get_db)):
+    person_db = crud_person.person.get_details(db, id=person_id)
+    if person_db is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return enrich_person_data(person_db)
+
+@router.put("/people/{person_id}", response_model=Person)
+def update_person(person_id: int, person_in: PersonUpdate, db: Session = Depends(get_db)):
+    person_db_obj = crud_person.person.get(db, id=person_id)
+    if not person_db_obj:
+        raise HTTPException(status_code=404, detail="Person not found")
+    
+    crud_person.person.update(db, db_obj=person_db_obj, obj_in=person_in)
+    updated_person_details = crud_person.person.get_details(db, id=person_id)
+    if not updated_person_details:
+        raise HTTPException(status_code=404, detail="Person not found after update")
+        
+    return enrich_person_data(updated_person_details)
+
+@router.delete("/people/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_person(person_id: int, db: Session = Depends(get_db)):
+    person_db = crud_person.person.remove(db, id=person_id)
+    if not person_db:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return
+# --- KONIEC REFAKTORYZACJI ---
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\api\endpoints\towns.py
+##########################################
+
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
+from app.crud import crud_town
+from app.schemas.town import Town, TownCreate, TownUpdate
+from app.api.dependencies import get_db
+
+router = APIRouter()
+
+@router.get("/towns", response_model=List[Town])
+def read_towns(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """
+    Pobierz listę miejscowości.
+    """
+    towns = crud_town.town.get_multi(db, skip=skip, limit=limit)
+    return towns
+
+
+@router.post("/towns", response_model=Town, status_code=status.HTTP_201_CREATED)
+def create_town(town_in: TownCreate, db: Session = Depends(get_db)):
+    """
+    Utwórz nową miejscowość.
+    """
+    # --- POCZĄTEK POPRAWKI ---
+    try:
+        town = crud_town.town.create(db=db, obj_in=town_in)
+        return town
+    except IntegrityError:
+        db.rollback() # Wycofaj transakcję, aby sesja była czysta
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Miejscowość o nazwie '{town_in.name}' już istnieje.",
+        )
+
+@router.get("/towns/{town_id}", response_model=Town)
+def read_town(town_id: int, db: Session = Depends(get_db)):
+    """
+    Pobierz miejscowość po ID.
+    """
+    db_town = crud_town.town.get(db, id=town_id)
+    if db_town is None:
+        raise HTTPException(status_code=404, detail="Town not found")
+    return db_town
+
+@router.put("/towns/{town_id}", response_model=Town)
+def update_town(town_id: int, town_in: TownUpdate, db: Session = Depends(get_db)):
+    """
+    Zaktualizuj miejscowość.
+    """
+    db_town = crud_town.town.get(db, id=town_id)
+    if not db_town:
+        raise HTTPException(status_code=404, detail="Town not found")
+    town = crud_town.town.update(db, db_obj=db_town, obj_in=town_in)
+    return town
+
+@router.delete("/towns/{town_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_town(town_id: int, db: Session = Depends(get_db)):
+    """
+    Usuń miejscowość.
+    """
+    db_town = crud_town.town.get(db, id=town_id)
+    if not db_town:
+        raise HTTPException(status_code=404, detail="Town not found")
+    crud_town.town.remove(db, id=town_id)
+    return
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\api\dependencies.py
+##########################################
+
+from app.core.database import SessionLocal
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\core\config.py
+##########################################
+
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "People Management API"
+    API_V1_STR: str = "/api/v1"
+    DATABASE_URL: str = "sqlite:///./sql_app.db"
+    RUN_SMOKE_TESTS: bool = True
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\core\database.py
+##########################################
+
+# Plik: app/core/database.py
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from .config import settings
+
+engine = create_engine(
+    settings.DATABASE_URL, 
+    connect_args={"check_same_thread": False} # Potrzebne tylko dla SQLite
+)
+
+# --- POCZĄTEK POPRAWKI ---
+# Włącz wymuszanie kluczy obcych (foreign keys) dla SQLite
+# To jest krytyczne dla integralności danych.
+if "sqlite" in settings.DATABASE_URL:
+    def _fk_pragma_on_connect(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        _fk_pragma_on_connect(dbapi_connection, connection_record)
+# --- KONIEC POPRAWKI ---
+
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\crud\base.py
+##########################################
+
+from typing import Any, Generic, Type, TypeVar
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from app.core.database import Base
+
+ModelType = TypeVar("ModelType", bound=Base)
+CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+
+class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
+    def __init__(self, model: Type[ModelType]):
+        self.model = model
+
+    def get(self, db: Session, id: Any) -> ModelType | None:
+        return db.query(self.model).filter(self.model.id == id).first()
+
+    def get_multi(self, db: Session, *, skip: int = 0, limit: int = 100) -> list[ModelType]:
+        return db.query(self.model).offset(skip).limit(limit).all()
+
+    def create(self, db: Session, *, obj_in: CreateSchemaType) -> ModelType:
+        obj_in_data = obj_in.model_dump()
+        db_obj = self.model(**obj_in_data)
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+    def update(self, db: Session, *, db_obj: ModelType, obj_in: UpdateSchemaType) -> ModelType:
+        obj_data = db_obj.__dict__
+        update_data = obj_in.model_dump(exclude_unset=True)
+        for field in obj_data:
+            if field in update_data:
+                setattr(db_obj, field, update_data[field])
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+    def remove(self, db: Session, *, id: int) -> ModelType | None:
+        obj = db.query(self.model).get(id)
+        if obj:
+            db.delete(obj)
+            db.commit()
+        return obj
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\crud\crud_company.py
+##########################################
+
+from sqlalchemy.orm import Session
+from app.crud.base import CRUDBase
+from app.models.models import Company, CompanyBranch
+from app.schemas.company import CompanyCreate, CompanyUpdate, CompanyBranchCreate, CompanyBranchUpdate
+
+class CRUDCompany(CRUDBase[Company, CompanyCreate, CompanyUpdate]):
+    pass
+
+class CRUDCompanyBranch(CRUDBase[CompanyBranch, CompanyBranchCreate, CompanyBranchUpdate]):
+    def create_with_company(self, db: Session, *, obj_in: CompanyBranchCreate, company_id: int) -> CompanyBranch:
+        """
+        Tworzy oddział przypisany do konkretnej firmy.
+        """
+        db_obj = self.model(**obj_in.model_dump(), company_id=company_id)
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+    def get_multi_by_company(self, db: Session, *, company_id: int, skip: int = 0, limit: int = 100) -> list[CompanyBranch]:
+        """
+        Pobiera listę oddziałów dla konkretnej firmy.
+        """
+        return (
+            db.query(self.model)
+            .filter(self.model.company_id == company_id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+company = CRUDCompany(Company)
+company_branch = CRUDCompanyBranch(CompanyBranch)
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\crud\crud_person.py
+##########################################
+
+# Plik: app/crud/crud_person.py
+
+from sqlalchemy.orm import Session, joinedload
+from .base import CRUDBase
+from app.models.models import Person, CompanyBranch
+from app.schemas.person import PersonCreate, PersonUpdate
+
+class CRUDPerson(CRUDBase[Person, PersonCreate, PersonUpdate]):
+    # --- POCZĄTEK NOWEGO KODU ---
+    def create_and_get_details(self, db: Session, *, obj_in: PersonCreate) -> Person | None:
+        """
+        Tworzy osobę, a następnie od razu pobiera ją z bazy
+        wraz z załadowanymi relacjami.
+        """
+        # Użyj metody create z klasy bazowej
+        created_person = super().create(db=db, obj_in=obj_in)
+        # Użyj metody get_details z tej klasy, aby pobrać pełny obiekt
+        return self.get_details(db=db, id=created_person.id)
+    # --- KONIEC NOWEGO KODU ---
+
+    def get_multi_details(self, db: Session, *, skip: int = 0, limit: int = 100) -> list[Person]:
+        return (
+            db.query(self.model)
+            .options(
+                joinedload(Person.town),
+                joinedload(Person.company_branch).joinedload(CompanyBranch.company)
+            )
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+    
+    def get_details(self, db: Session, id: int) -> Person | None:
+        return (
+            db.query(self.model)
+            .options(
+                joinedload(Person.town),
+                joinedload(Person.company_branch).joinedload(CompanyBranch.company)
+            )
+            .filter(self.model.id == id)
+            .first()
+        )
+
+person = CRUDPerson(Person)
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\crud\crud_town.py
+##########################################
+
+from app.crud.base import CRUDBase
+from app.models.models import Town
+from app.schemas.town import TownCreate, TownUpdate
+
+class CRUDTown(CRUDBase[Town, TownCreate, TownUpdate]):
+    pass
+
+town = CRUDTown(Town)
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\crud\init_db.py
+##########################################
+
+from sqlalchemy.orm import Session
+from app.models.models import Company, CompanyBranch, Town, Person
+import datetime
+
+def initialise_db(db: Session):
+    # Sprawdź, czy dane już istnieją
+    if db.query(Company).first():
+        return
+
+    # Tworzenie Firm
+    company1 = Company(name="TechCorp")
+    company2 = Company(name="HealthData")
+    db.add_all([company1, company2])
+    db.commit()
+
+    # Tworzenie Oddziałów
+    branch1a = CompanyBranch(name="Warszawa", company_id=company1.id)
+    branch1b = CompanyBranch(name="Kraków", company_id=company1.id)
+    branch2a = CompanyBranch(name="Gdańsk", company_id=company2.id)
+    db.add_all([branch1a, branch1b, branch2a])
+    db.commit()
+    
+    # Tworzenie Miejscowości
+    town1 = Town(name="Warszawa")
+    town2 = Town(name="Kraków")
+    town3 = Town(name="Gdańsk")
+    db.add_all([town1, town2, town3])
+    db.commit()
+
+    # Tworzenie Osób
+    person1 = Person(first_name="Jan", last_name="Kowalski", birth_date=datetime.date(1985, 5, 20), town_id=town1.id, company_branch_id=branch1a.id)
+    person2 = Person(first_name="Anna", last_name="Nowak", birth_date=datetime.date(1992, 9, 10), town_id=town2.id, company_branch_id=branch1b.id)
+    person3 = Person(first_name="Piotr", last_name="Wiśniewski", birth_date=datetime.date(1988, 11, 30), town_id=town3.id, company_branch_id=branch2a.id)
+    person4 = Person(first_name="Katarzyna", last_name="Zielińska", birth_date=datetime.date(1995, 2, 1), town_id=town1.id, company_branch_id=branch1a.id)
+
+    db.add_all([person1, person2, person3, person4])
+    db.commit()
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\models\models.py
+##########################################
+
+from sqlalchemy import Column, Integer, String, Date, ForeignKey
+from sqlalchemy.orm import relationship
+from app.core.database import Base
+
+class Person(Base):
+    __tablename__ = "osoby"
+    id = Column(Integer, primary_key=True, index=True)
+    first_name = Column(String, index=True, nullable=False)
+    last_name = Column(String, index=True, nullable=False)
+    birth_date = Column(Date, nullable=False)
+    
+    town_id = Column(Integer, ForeignKey("miejscowosci.id"))
+    company_branch_id = Column(Integer, ForeignKey("oddzialy_firmy.id"))
+
+    town = relationship("Town", back_populates="people")
+    company_branch = relationship("CompanyBranch", back_populates="employees")
+
+class Town(Base):
+    __tablename__ = "miejscowosci"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    people = relationship("Person", back_populates="town")
+
+class Company(Base):
+    __tablename__ = "firmy"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    branches = relationship("CompanyBranch", back_populates="company", cascade="all, delete-orphan")
+
+class CompanyBranch(Base):
+    __tablename__ = "oddzialy_firmy"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+    company_id = Column(Integer, ForeignKey("firmy.id"))
+
+    company = relationship("Company", back_populates="branches")
+    employees = relationship("Person", back_populates="company_branch")
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\schemas\company.py
+##########################################
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+# Schematy dla Oddziału Firmy
+class CompanyBranchBase(BaseModel):
+    name: str
+
+class CompanyBranchCreate(CompanyBranchBase):
+    pass
+
+class CompanyBranchUpdate(BaseModel):
+    name: Optional[str] = None
+
+class CompanyBranch(CompanyBranchBase):
+    id: int
+    company_id: int
+
+    class Config:
+        from_attributes = True
+
+# Schematy dla Firmy
+class CompanyBase(BaseModel):
+    name: str
+
+class CompanyCreate(CompanyBase):
+    pass
+
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = None
+
+class Company(CompanyBase):
+    id: int
+    branches: List[CompanyBranch] = []
+
+    class Config:
+        from_attributes = True
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\schemas\person.py
+##########################################
+
+# Plik: app/schemas/person.py
+
+import datetime
+from pydantic import BaseModel, Field, computed_field
+from typing import Optional
+
+class PersonBase(BaseModel):
+    first_name: str = Field(..., min_length=1, example="Anna")
+    last_name: str = Field(..., min_length=1, example="Kowalska")
+    birth_date: datetime.date = Field(..., example="1990-01-15")
+    town_id: int = Field(..., gt=0, example=1)
+    company_branch_id: int = Field(..., gt=0, example=1)
+
+class PersonCreate(PersonBase):
+    pass
+
+class PersonUpdate(BaseModel):
+    first_name: Optional[str] = Field(None, min_length=1)
+    last_name: Optional[str] = Field(None, min_length=1)
+    birth_date: Optional[datetime.date] = None
+    town_id: Optional[int] = Field(None, gt=0)
+    company_branch_id: Optional[int] = Field(None, gt=0)
+
+class PersonInDB(PersonBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+class Person(PersonInDB):
+    miejscowosc: str
+    firma: str
+    oddzial_firmy: str
+
+    @computed_field
+    @property
+    def age(self) -> int:
+        today = datetime.date.today()
+        return today.year - self.birth_date.year - ((today.month, today.day) < (self.birth_date.month, self.birth_date.day))
+
+    @computed_field
+    @property
+    def gender(self) -> str:
+        return "Kobieta" if self.first_name.lower().endswith('a') else "Mężczyzna"
+
+    company_id: Optional[int] = None
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\schemas\town.py
+##########################################
+
+from pydantic import BaseModel
+from typing import Optional
+
+class TownBase(BaseModel):
+    name: str
+
+class TownCreate(TownBase):
+    pass
+
+class TownUpdate(BaseModel):
+    name: Optional[str] = None
+
+class Town(TownBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\tests\test_companies.py
+##########################################
+
+import json
+from pathlib import Path
+from fastapi.testclient import TestClient
+from app.smoke_tests.utils import run_test_from_file
+
+def run_test(client: TestClient) -> list:
+    """
+    Uruchamia testy dymne dla endpointów związanych z firmami i ich oddziałami (Companies & Branches).
+    """
+    print("\n--- Rozpoczęcie testów dla: Companies & Branches ---")
+    
+    test_data_path = Path(__file__).parent.parent / "data" / "companies.json"
+    with open(test_data_path, "r", encoding="utf-8") as f:
+        test_data = json.load(f)
+        
+    return run_test_from_file(client, test_data)
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\tests\test_people.py
+##########################################
+
+import json
+from pathlib import Path
+from fastapi.testclient import TestClient
+from app.smoke_tests.utils import run_test_from_file
+
+def run_test(client: TestClient) -> list:
+    """
+    Uruchamia testy dymne dla endpointów związanych z Osobami (People).
+    """
+    print("\n--- Rozpoczęcie testów dla: People ---")
+    
+    test_data_path = Path(__file__).parent.parent / "data" / "people.json"
+    with open(test_data_path, "r", encoding="utf-8") as f:
+        test_data = json.load(f)
+        
+    return run_test_from_file(client, test_data)
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\tests\test_towns.py
+##########################################
+
+import json
+from pathlib import Path
+from fastapi.testclient import TestClient
+from app.smoke_tests.utils import run_test_from_file
+
+def run_test(client: TestClient) -> list:
+    """
+    Uruchamia testy dymne dla endpointów związanych z miejscowościami (Towns).
+    """
+    print("\n--- Rozpoczęcie testów dla: Towns ---")
+    
+    test_data_path = Path(__file__).parent.parent / "data" / "towns.json"
+    with open(test_data_path, "r", encoding="utf-8") as f:
+        test_data = json.load(f)
+        
+    return run_test_from_file(client, test_data)
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\runner.py
+##########################################
+
+import importlib
+import sys
+import json
+from pathlib import Path
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app.core.config import settings
+from .utils import get_outcome_description, GREEN, RED, YELLOW, RESET, BOLD, GRAY
+
+def setup_test_environment(client: TestClient) -> bool:
+    """
+    Przygotowuje środowisko testowe - w tym przypadku nie jest wymagane
+    żadne specjalne przygotowanie, ponieważ dane są ładowane przy starcie.
+    """
+    print("--- Środowisko testowe gotowe (dane inicjalizowane przy starcie) ---")
+    return True
+
+def cleanup_test_environment() -> bool:
+    """
+    Sprzątanie po testach - w tym projekcie nie jest wymagane.
+    """
+    print(f"\n--- Sprzątanie nie jest wymagane ---")
+    return True
+
+def run_all_smoke_tests(app: FastAPI):
+    print(f"\n{BOLD}--- URUCHAMIANIE MODUŁOWYCH TESTÓW DYMNYCH ---{RESET}")
+    client = TestClient(app)
+    
+    if not setup_test_environment(client):
+        return
+
+    total_passed, total_failed = 0, 0
+    all_results = []
+    
+    tests_path = Path(__file__).parent / "tests"
+    sys.path.insert(0, str(tests_path.parent.parent.parent))
+
+    for p in sorted(tests_path.glob("test_*.py")):
+        module_path = ".".join(p.relative_to(Path.cwd()).parts).replace(".py", "")
+        try:
+            module = importlib.import_module(module_path)
+            if hasattr(module, "run_test"):
+                test_results = module.run_test(client)
+                for res in test_results:
+                    all_results.append(res)
+                    if "SUKCES" in res["line"]:
+                        total_passed += 1
+                    else:
+                        total_failed += 1
+        except Exception as e:
+            import traceback
+            print(f"{RED}BŁĄD importu/uruchomienia testu {p.name}: {e}\n{traceback.format_exc()}{RESET}")
+            total_failed += 1
+    
+    header = " Wyniki testów "
+    print(f"\n\n{BOLD}╭{'─' * (len(header) + 2)}╮{RESET}")
+    print(f"{BOLD}│ {YELLOW}{header.upper()}{RESET} │{RESET}")
+    print(f"{BOLD}╰{'─' * (len(header) + 2)}╯{RESET}")
+    
+    for line in [r['line'] for r in all_results]:
+        print(f"    {GRAY}├─>{RESET} {line}")
+
+    if not cleanup_test_environment():
+        total_failed += 1
+
+    summary_width = 46
+    print(f"\n\n{BOLD}╭{'─' * summary_width}╮{RESET}")
+    print(f"{BOLD}│{'PODSUMOWANIE TESTÓW'.center(summary_width)}│{RESET}")
+    print(f"{BOLD}├{'─' * summary_width}┤{RESET}")
+    print(f"{BOLD}│{f' Łącznie testów: {total_passed + total_failed}'.ljust(summary_width - 1)} │{RESET}")
+    print(f"{BOLD}│{f' {GREEN}Zdane: {total_passed}{RESET}'.ljust(summary_width + len(GREEN) + len(RESET) - 1)} │{RESET}")
+    print(f"{BOLD}│{f' {RED}Niezdane: {total_failed}{RESET}'.ljust(summary_width + len(RED) + len(RESET) - 1)} │{RESET}")
+    print(f"{BOLD}╰{'─' * summary_width}╯{RESET}")
+
+    if total_failed > 0:
+        print(f"{RED}{BOLD}UWAGA: Wykryto problemy w {total_failed} przypadkach testowych!{RESET}")
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\utils.py
+##########################################
+
+# Plik: app/smoke_tests/utils.py
+
+import json
+import re
+from fastapi.testclient import TestClient
+from typing import Dict, Any
+
+# === PALETA KOLORÓW ===
+GREEN, RED, YELLOW, RESET = "\033[92m", "\033[91m", "\033[93m", "\033[0m"
+BOLD = "\033[1m"
+GRAY = "\033[90m"
+
+METHOD_COLORS = {
+    "GET": "\033[96m", "POST": "\033[92m", "PUT": "\033[93m", "DELETE": "\033[91m",
+}
+
+
+def format_payload(payload_template: Any, captured_ids: Dict[str, Any]) -> Any:
+    """
+    Rekursywnie formatuje stringi w szablonie payloadu, używając captured_ids.
+    Unika błędu formatowania całego stringu JSON.
+    """
+    if isinstance(payload_template, dict):
+        return {k: format_payload(v, captured_ids) for k, v in payload_template.items()}
+    elif isinstance(payload_template, list):
+        return [format_payload(i, captured_ids) for i in payload_template]
+    elif isinstance(payload_template, str):
+        try:
+            # Formatuj tylko, jeśli to string
+            return payload_template.format(**captured_ids)
+        except KeyError:
+            # Jeśli string zawiera '{' ale nie jako placeholder, zwróć oryginał
+            return payload_template
+    else:
+        # Zwróć inne typy (int, bool, etc.) bez zmian
+        return payload_template
+
+
+def get_outcome_description(status: int) -> str:
+    """Zwraca opis oczekiwanego wyniku na podstawie kodu statusu."""
+    if status < 300: return f"{GREEN}(oczekiwany sukces){RESET}"
+    if 400 <= status < 500: return f"{YELLOW}(oczekiwany błąd klienta){RESET}"
+    return f"{RED}(oczekiwany błąd serwera){RESET}"
+
+def run_test_from_file(client: TestClient, test_data: Dict[str, Any]) -> list:
+    """Uruchamia serię testów zdefiniowanych w słowniku (wczytanym z JSON)."""
+    results = []
+    captured_ids = {}
+
+    METHOD_URL_WIDTH = 50
+    DESCRIPTION_WIDTH = 75
+
+    for test in test_data["tests"]:
+        opis = test["opis"]
+        method = test["method"]
+        path_template = test["path"]
+        expected_status = test["oczekiwany_status"]
+        payload_template = test.get("payload")
+
+        # --- POCZĄTEK ZMIAN DIAGNOSTYCZNYCH ---
+        print(f"--- DEBUG: Uruchamianie testu '{opis}'. Obecne ID: {captured_ids}")
+        # --- KONIEC ZMIAN DIAGNOSTYCZNYCH ---
+        
+        # Formatowanie ścieżki i payloadu z przechwyconymi ID
+        path = path_template.format(**captured_ids)
+        payload = format_payload(payload_template, captured_ids) if payload_template else None
+
+        method_color = METHOD_COLORS.get(method.upper(), "")
+        colored_method = f"{method_color}[{method.upper()}]{RESET}"
+        
+        endpoint_str_raw = f"[{method.upper()}] {path}"
+        endpoint_str_colored = f"{colored_method} {path}"
+        padding1 = " " * (METHOD_URL_WIDTH - len(endpoint_str_raw))
+
+        outcome_desc = get_outcome_description(expected_status)
+        full_opis_raw = f"Test: '{opis}' {outcome_desc}"
+        full_opis_colored = f"Test: '{opis}' {outcome_desc}"
+        padding2 = " " * (DESCRIPTION_WIDTH - len(full_opis_raw) + len(outcome_desc) - len(re.sub(r'\x1b\[[0-9;]*m', '', outcome_desc)))
+
+        result_line_prefix = f"{endpoint_str_colored}{padding1}| {full_opis_colored}{padding2}"
+
+        try:
+            response = client.request(method, path, json=payload)
+            
+            if response.status_code == expected_status:
+                result_line = f"{result_line_prefix} -> {GREEN}SUKCES{RESET} (Otrzymano: {response.status_code})"
+                if "capture_id" in test and response.status_code < 300 and response.content:
+                    try:
+                        response_json = response.json()
+                        if "id" in response_json:
+                             # --- POCZĄTEK ZMIAN DIAGNOSTYCZNYCH ---
+                             print(f"--- DEBUG: Przechwycono ID! Klucz: '{test['capture_id']}', Wartość: {response_json['id']}")
+                             # --- KONIEC ZMIAN DIAGNOSTYCZNYCH ---
+                             captured_ids[test["capture_id"]] = response_json["id"]
+                        else:
+                             # --- POCZĄTEK ZMIAN DIAGNOSTYCZNYCH ---
+                             print(f"--- DEBUG: BŁĄD PRZECHWYTYWANIA! W odpowiedzi JSON nie ma klucza 'id'. Otrzymano: {response_json}")
+                             # --- KONIEC ZMIAN DIAGNOSTYCZNYCH ---
+                    except json.JSONDecodeError:
+                        pass # Ignoruj jeśli odpowiedź nie jest JSONem
+            else:
+                failure_reason = f"Oczekiwano: {expected_status}, Otrzymano: {response.status_code}"
+                result_line = f"{result_line_prefix} -> {RED}PORAŻKA{RESET} ({failure_reason})"
+
+        except Exception as e:
+            result_line = f"{result_line_prefix} -> {RED}EXCEPTION: {e}{RESET}"
+        
+        results.append({"line": result_line, "status": expected_status})
+            
+    return results
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\data\companies.json
+##########################################
+
+{
+    "tests": [
+        {
+            "opis": "Utworzenie nowej firmy",
+            "method": "POST",
+            "path": "/api/v1/companies",
+            "payload": { "name": "Firma Testowa" },
+            "oczekiwany_status": 201,
+            "capture_id": "new_company_id"
+        },
+        {
+            "opis": "Pobranie nowo utworzonej firmy",
+            "method": "GET",
+            "path": "/api/v1/companies/{new_company_id}",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Utworzenie oddziału dla nowej firmy",
+            "method": "POST",
+            "path": "/api/v1/companies/{new_company_id}/branches",
+            "payload": { "name": "Oddział Testowy" },
+            "oczekiwany_status": 201,
+            "capture_id": "new_branch_id"
+        },
+        {
+            "opis": "Pobranie listy oddziałów firmy",
+            "method": "GET",
+            "path": "/api/v1/companies/{new_company_id}/branches",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Próba utworzenia oddziału dla nieistniejącej firmy",
+            "method": "POST",
+            "path": "/api/v1/companies/99999/branches",
+            "payload": { "name": "Oddział Widmo" },
+            "oczekiwany_status": 404
+        },
+        {
+            "opis": "Usunięcie oddziału firmy",
+            "method": "DELETE",
+            "path": "/api/v1/branches/{new_branch_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Usunięcie firmy testowej",
+            "method": "DELETE",
+            "path": "/api/v1/companies/{new_company_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Weryfikacja usunięcia firmy",
+            "method": "GET",
+            "path": "/api/v1/companies/{new_company_id}",
+            "oczekiwany_status": 404
+        }
+    ]
+}
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\data\people.json
+##########################################
+
+{
+    "tests": [
+        {
+            "opis": "Pobranie listy wszystkich osób (przed dodaniem)",
+            "method": "GET",
+            "path": "/api/v1/people",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Utworzenie nowej osoby",
+            "method": "POST",
+            "path": "/api/v1/people",
+            "payload": {
+                "first_name": "Jan",
+                "last_name": "Testowy",
+                "birth_date": "1999-12-31",
+                "town_id": 1,
+                "company_branch_id": 1
+            },
+            "oczekiwany_status": 201,
+            "capture_id": "new_person_id"
+        },
+        {
+            "opis": "Pobranie nowo utworzonej osoby",
+            "method": "GET",
+            "path": "/api/v1/people/{new_person_id}",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Aktualizacja danych osoby",
+            "method": "PUT",
+            "path": "/api/v1/people/{new_person_id}",
+            "payload": {
+                "last_name": "Zaktualizowany"
+            },
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Usunięcie osoby",
+            "method": "DELETE",
+            "path": "/api/v1/people/{new_person_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Sprawdzenie, czy osoba została usunięta",
+            "method": "GET",
+            "path": "/api/v1/people/{new_person_id}",
+            "oczekiwany_status": 404
+        },
+        {
+            "opis": "Próba pobrania nieistniejącej osoby (ogólna)",
+            "method": "GET",
+            "path": "/api/v1/people/99999",
+            "oczekiwany_status": 404
+        },
+        {
+            "opis": "Próba utworzenia osoby z nieprawidłowym town_id",
+            "method": "POST",
+            "path": "/api/v1/people",
+            "payload": {
+                "first_name": "Anna",
+                "last_name": "Błąd",
+                "birth_date": "2001-01-01",
+                "town_id": 99999,
+                "company_branch_id": 1
+            },
+            "oczekiwany_status": 400
+        }
+    ]
+}
+
+##########################################
+# FILE: C:\Users\engli\fiszki\fiszki\zadanie rekrutacyjne\app\smoke_tests\data\towns.json
+##########################################
+
+{
+    "tests": [
+        {
+            "opis": "Pobranie listy wszystkich miejscowości (przed dodaniem)",
+            "method": "GET",
+            "path": "/api/v1/towns",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Utworzenie nowej miejscowości",
+            "method": "POST",
+            "path": "/api/v1/towns",
+            "payload": { "name": "Miasto Testowe" },
+            "oczekiwany_status": 201,
+            "capture_id": "new_town_id"
+        },
+        {
+            "opis": "Pobranie nowo utworzonej miejscowości",
+            "method": "GET",
+            "path": "/api/v1/towns/{new_town_id}",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Aktualizacja nazwy miejscowości",
+            "method": "PUT",
+            "path": "/api/v1/towns/{new_town_id}",
+            "payload": { "name": "Miasto Testowe Zmienione" },
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Próba utworzenia miejscowości o tej samej nazwie (opcjonalny test - zależy od logiki biznesowej)",
+            "method": "POST",
+            "path": "/api/v1/towns",
+            "payload": { "name": "Warszawa" },
+            "oczekiwany_status": 409
+        },
+        {
+            "opis": "Usunięcie miejscowości testowej",
+            "method": "DELETE",
+            "path": "/api/v1/towns/{new_town_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Weryfikacja usunięcia miejscowości",
+            "method": "GET",
+            "path": "/api/v1/towns/{new_town_id}",
+            "oczekiwany_status": 404
+        }
+    ]
+}

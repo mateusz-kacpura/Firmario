@@ -1,0 +1,50 @@
+{
+    "tests": [
+        {
+            "opis": "Pobranie listy wszystkich miejscowości (przed dodaniem)",
+            "method": "GET",
+            "path": "/api/v1/towns",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Utworzenie nowej miejscowości",
+            "method": "POST",
+            "path": "/api/v1/towns",
+            "payload": { "name": "Miasto Testowe" },
+            "oczekiwany_status": 201,
+            "capture_id": "new_town_id"
+        },
+        {
+            "opis": "Pobranie nowo utworzonej miejscowości",
+            "method": "GET",
+            "path": "/api/v1/towns/{new_town_id}",
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Aktualizacja nazwy miejscowości",
+            "method": "PUT",
+            "path": "/api/v1/towns/{new_town_id}",
+            "payload": { "name": "Miasto Testowe Zmienione" },
+            "oczekiwany_status": 200
+        },
+        {
+            "opis": "Próba utworzenia miejscowości o tej samej nazwie (opcjonalny test - zależy od logiki biznesowej)",
+            "method": "POST",
+            "path": "/api/v1/towns",
+            "payload": { "name": "Warszawa" },
+            "oczekiwany_status": 409
+        },
+        {
+            "opis": "Usunięcie miejscowości testowej",
+            "method": "DELETE",
+            "path": "/api/v1/towns/{new_town_id}",
+            "oczekiwany_status": 204
+        },
+        {
+            "opis": "Weryfikacja usunięcia miejscowości",
+            "method": "GET",
+            "path": "/api/v1/towns/{new_town_id}",
+            "oczekiwany_status": 404
+        }
+    ]
+}
