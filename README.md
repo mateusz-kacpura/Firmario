@@ -91,3 +91,17 @@ Testy dymne są domyślnie włączone i uruchamiają się przy starcie aplikacji
 
 ```env
 RUN_SMOKE_TESTS=False
+```
+
+.env.example
+```env example
+PROJECT_NAME="People Management API"
+API_V1_STR="/api/v1"
+
+# Ustaw na True, aby uruchomić testy dymne przy starcie aplikacji
+RUN_SMOKE_TESTS=True
+
+# Konfiguracja bazy danych SQLite
+DATABASE_URL="sqlite:///./sql_app.db"
+
+RUN_SMOKE_TESTS=True
