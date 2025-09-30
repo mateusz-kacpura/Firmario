@@ -2,7 +2,8 @@
 
 import uvicorn
 from fastapi import FastAPI
-# Zaktualizowane importy
+from fastapi.middleware.cors import CORSMiddleware  # <-- KROK 1: Dodaj ten import
+
 from app.api.endpoints import people, companies, towns 
 from app.core.config import settings
 from app.core.database import engine, SessionLocal
@@ -18,9 +19,27 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
+# --- POCZĄTEK ZMIAN ---
+# KROK 2: Dodaj konfigurację CORS Middleware
+# Lista źródeł, które mogą wysyłać zapytania.
+# Dla dewelopmentu dodajemy adres URL frontendu Next.js.
+origins = [
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],  # Pozwala na wszystkie metody (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Pozwala na wszystkie nagłówki
+)
+# --- KONIEC ZMIAN ---
+
+
 # Dołączenie wszystkich routerów
 app.include_router(people.router, prefix=settings.API_V1_STR, tags=["People"])
-app.include_router(companies.router, prefix=settings.API_V1_STR, tags=["Companies & Branches"]) # Zmieniono tag dla lepszej organizacji
+app.include_router(companies.router, prefix=settings.API_V1_STR, tags=["Companies & Branches"])
 app.include_router(towns.router, prefix=settings.API_V1_STR, tags=["Towns"])
 
 
@@ -30,11 +49,9 @@ def on_startup():
     Zdarzenie wykonywane przy starcie aplikacji.
     """
     db = SessionLocal()
-    # Inicjalizacja bazy danych podstawowymi danymi
     initialise_db(db)
     db.close()
 
-    # Uruchomienie testów dymnych, jeśli flaga jest ustawiona
     if settings.RUN_SMOKE_TESTS:
         print("--- Uruchamianie testów dymnych przy starcie aplikacji ---")
         run_all_smoke_tests(app)
