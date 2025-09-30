@@ -1,9 +1,3 @@
-```
-
-#### `README.md`
-Dokumentacja projektu.
-
-```markdown
 # People Management API
 
 Prosta aplikacja API stworzona przy użyciu **FastAPI** do zarządzania listą osób, firm, oddziałów i miejscowości.
